@@ -201,7 +201,9 @@ fn run_debug(config: &OcdConfig, elf_path: &Path) {
     println!();
 
     // 启动 OpenOCD GDB 服务器（保持运行）
-    // 显式指定 gdb_port，确保跨平台兼容（某些 Linux 发行版 OpenOCD 默认端口可能不同）
+    // 注意：gdb_port 必须在 OpenOCD 启动时作为第一个 -c 参数配置，
+    // 因为 GDB 服务器在 OpenOCD 初始化阶段就会开始监听。
+    // 如果放在 program/reset 之后设置，可能已经太晚了。
     let mut openocd = Command::new("openocd")
         .args(&[
             "-f",
@@ -209,11 +211,11 @@ fn run_debug(config: &OcdConfig, elf_path: &Path) {
             "-f",
             &config.target_chip,
             "-c",
+            &format!("gdb_port {}", gdb_port),
+            "-c",
             &format!("program {}", elf_str),
             "-c",
             "reset halt",
-            "-c",
-            &format!("gdb_port {}", gdb_port),
         ])
         .spawn()
         .expect("无法执行 openocd，请确保已安装");
@@ -288,12 +290,17 @@ fn find_gdb() -> String {
 ///
 /// 默认使用 3333 端口，如果被占用则自动尝试 3334-3343 范围内的端口，
 /// 并提醒用户原端口被占用。
+///
+/// 注意：使用 `0.0.0.0` 而不是 `127.0.0.1` 进行检测，因为 OpenOCD
+/// 默认绑定在 `0.0.0.0`（所有网络接口），如果只检测 `127.0.0.1` 可能
+/// 漏掉已被 `0.0.0.0` 占用的端口。
 fn find_available_gdb_port() -> u16 {
     let preferred_port = 3333u16;
     let max_attempts = 10; // 尝试 3333..3343 共 11 个端口
 
     // 尝试绑定到首选端口，如果成功说明端口可用
-    if TcpListener::bind(("127.0.0.1", preferred_port)).is_ok() {
+    // 使用 0.0.0.0 匹配 OpenOCD 的默认绑定行为
+    if TcpListener::bind(("0.0.0.0", preferred_port)).is_ok() {
         return preferred_port;
     }
 
@@ -302,7 +309,7 @@ fn find_available_gdb_port() -> u16 {
     eprintln!("[WARN] 端口 {} 已被占用，正在扫描可用端口...", preferred_port);
 
     for port in (preferred_port + 1)..=(preferred_port + max_attempts) {
-        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+        if TcpListener::bind(("0.0.0.0", port)).is_ok() {
             eprintln!("[WARN] 使用端口 {} 替代 {}（原端口被占用）", port, preferred_port);
             eprintln!("[WARN] 请使用: target remote :{} 连接 GDB", port);
             return port;
