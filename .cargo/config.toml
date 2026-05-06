@@ -1,0 +1,4 @@
+[build]
+# cargo-ocd 是主机工具，使用本地 target
+target = "aarch64-apple-darwin"
+rustflags = []
