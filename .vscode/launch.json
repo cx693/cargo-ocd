@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "STM32 Debug (OpenOCD)",
+            "type": "cortex-debug",
+            "request": "launch",
+            "servertype": "openocd",
+            "cwd": "${workspaceRoot}",
+            // ⚠️ 修改点 1/2：将下面的 stm32f103-led 替换为你的 Cargo.toml 中 [package].name 的值
+            // 例如：如果你的 Cargo.toml 中 name = "my-project"，则改为 my-project
+            "executable": "${workspaceRoot}/target/thumbv7em-none-eabihf/debug/stm32f407-blink",
+            "configFiles": [
+                "interface/cmsis-dap.cfg",
+                "target/stm32f4x.cfg"
+            ],
+            // 如果使用 ST-Link，改为:
+            // "configFiles": ["interface/stlink.cfg", "target/stm32f1x.cfg"],
+            // 如果使用 J-Link，改为:
+            // "configFiles": ["interface/jlink.cfg", "target/stm32f1x.cfg"],
+            // 使用 rust-gdb（底层调用 brew install gdb 安装的 GDB 16.3）
+            // rust-gdb(前提有gdb10.0) -> gdb -> gdb-multiarch -> arm-none-eabi-gdb
+            "gdbPath": "rust-gdb",
+            "preLaunchTask": "烧录 (debug)",
+            "rtos": "auto",
+            "runToEntryPoint":"main",
+            "showDevDebugOutput": "none"
+        }
+    ]
+}

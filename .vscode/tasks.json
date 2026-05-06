@@ -1,0 +1,58 @@
+{
+    // 参见 https://go.microsoft.com/fwlink/?LinkId=733558
+    // 了解 tasks.json 格式的文档。
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "烧录 (debug)",
+            "type": "shell",
+            "command": "cargo ocd",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "烧录 (release)",
+            "type": "shell",
+            "command": "cargo ocd --release",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "烧录 + 手动GDB调试",
+            "type": "shell",
+            "command": "cargo ocd d",
+            "group": "none",
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        }
+    ]
+}
