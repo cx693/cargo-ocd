@@ -38,6 +38,7 @@
 //! 支持 CMSIS-DAP / ST-Link / J-Link 等所有 OpenOCD 支持的下载器。
 //! 支持任何 OpenOCD 兼容的目标芯片（通过 target 和 target-triple 配置）。
 
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io::Read};
@@ -140,7 +141,8 @@ fn main() {
 /// 烧录模式：编译 → 烧录 → 退出
 fn run_flash(config: &OcdConfig, elf_path: &Path) {
     println!();
-    println!("[FLASH] Firmware: {}", elf_path.display());
+    let elf_str = elf_path.to_string_lossy().replace('\\', "/");
+    println!("[FLASH] Firmware: {}", elf_str);
     println!("[FLASH] Programming via OpenOCD...");
 
     let status = Command::new("openocd")
@@ -150,7 +152,7 @@ fn run_flash(config: &OcdConfig, elf_path: &Path) {
             "-f",
             &config.target_chip,
             "-c",
-            &format!("program {} verify reset exit", elf_path.display()),
+            &format!("program {} verify reset exit", elf_str),
         ])
         .status()
         .expect("无法执行 openocd，请确保已安装");
@@ -167,7 +169,8 @@ fn run_flash(config: &OcdConfig, elf_path: &Path) {
 /// 调试模式：编译 → 烧录 → 启动 OpenOCD GDB 服务器 → 启动 GDB
 fn run_debug(config: &OcdConfig, elf_path: &Path) {
     println!();
-    println!("[DEBUG] Firmware: {}", elf_path.display());
+    let elf_str = elf_path.to_string_lossy().replace('\\', "/");
+    println!("[DEBUG] Firmware: {}", elf_str);
     println!("[DEBUG] Programming & starting GDB server...");
 
     // 先烧录固件
@@ -178,10 +181,7 @@ fn run_debug(config: &OcdConfig, elf_path: &Path) {
             "-f",
             &config.target_chip,
             "-c",
-            &format!(
-                "program {} verify reset exit",
-                elf_path.display()
-            ),
+            &format!("program {} verify reset exit", elf_str),
         ])
         .status()
         .expect("无法执行 openocd，请确保已安装");
@@ -191,13 +191,17 @@ fn run_debug(config: &OcdConfig, elf_path: &Path) {
         std::process::exit(1);
     }
 
+    // 检测端口可用性，如果 3333 被占用则自动分配随机端口
+    let gdb_port = find_available_gdb_port();
+
     println!();
-    println!("[DEBUG] Starting OpenOCD GDB server on port 3333...");
-    println!("[DEBUG] Connect GDB with: target remote :3333");
-    println!("[DEBUG] ELF file: {}", elf_path.display());
+    println!("[DEBUG] Starting OpenOCD GDB server on port {}...", gdb_port);
+    println!("[DEBUG] Connect GDB with: target remote :{}", gdb_port);
+    println!("[DEBUG] ELF file: {}", elf_str);
     println!();
 
     // 启动 OpenOCD GDB 服务器（保持运行）
+    // 显式指定 gdb_port，确保跨平台兼容（某些 Linux 发行版 OpenOCD 默认端口可能不同）
     let mut openocd = Command::new("openocd")
         .args(&[
             "-f",
@@ -205,38 +209,40 @@ fn run_debug(config: &OcdConfig, elf_path: &Path) {
             "-f",
             &config.target_chip,
             "-c",
-            &format!("program {}", elf_path.display()),
+            &format!("program {}", elf_str),
             "-c",
             "reset halt",
+            "-c",
+            &format!("gdb_port {}", gdb_port),
         ])
         .spawn()
         .expect("无法执行 openocd，请确保已安装");
 
-    // 等待 OpenOCD 启动
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // 等待 OpenOCD 启动（给足时间，特别是 Linux 上某些 USB 设备需要更长时间初始化）
+    std::thread::sleep(std::time::Duration::from_secs(3));
 
     // 查找可用的 GDB
     let gdb = find_gdb();
 
     println!("[DEBUG] Starting GDB: {}", gdb);
-    println!("[DEBUG] Auto-executing: target remote :3333, break main, continue");
+    println!("[DEBUG] Auto-executing: target remote :{}, break main, continue", gdb_port);
     println!("[DEBUG] 已自动在 main() 设置断点，程序将在 main 入口处暂停");
     println!("[DEBUG] 之后可使用 GDB 命令单步调试（见文档 9.3 节）");
     println!();
 
     // 启动 GDB，自动执行：
-    //   1. target remote :3333  - 连接到 OpenOCD
-    //   2. break main          - 在 main() 设置断点
-    //   3. continue            - 运行到 main() 断点处暂停
+    //   1. target remote :{port}  - 连接到 OpenOCD
+    //   2. break main            - 在 main() 设置断点
+    //   3. continue              - 运行到 main() 断点处暂停
     let gdb_status = Command::new(&gdb)
         .args(&[
             "-ex",
-            "target remote :3333",
+            &format!("target remote :{}", gdb_port),
             "-ex",
             "break main",
             "-ex",
             "continue",
-            &elf_path.display().to_string(),
+            &elf_str,
         ])
         .status()
         .expect("无法启动 GDB，请确保已安装 gdb 或 rust-gdb 最后考虑 arm-none-eabi-gdb");
@@ -276,6 +282,41 @@ fn find_gdb() -> String {
     }
     // 默认返回，会在后续报错
     "rust-gdb".to_string()
+}
+
+/// 检测并返回可用的 GDB 服务器端口
+///
+/// 默认使用 3333 端口，如果被占用则自动尝试 3334-3343 范围内的端口，
+/// 并提醒用户原端口被占用。
+fn find_available_gdb_port() -> u16 {
+    let preferred_port = 3333u16;
+    let max_attempts = 10; // 尝试 3333..3343 共 11 个端口
+
+    // 尝试绑定到首选端口，如果成功说明端口可用
+    if TcpListener::bind(("127.0.0.1", preferred_port)).is_ok() {
+        return preferred_port;
+    }
+
+    // 3333 被占用，提示用户并尝试后续端口
+    eprintln!();
+    eprintln!("[WARN] 端口 {} 已被占用，正在扫描可用端口...", preferred_port);
+
+    for port in (preferred_port + 1)..=(preferred_port + max_attempts) {
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            eprintln!("[WARN] 使用端口 {} 替代 {}（原端口被占用）", port, preferred_port);
+            eprintln!("[WARN] 请使用: target remote :{} 连接 GDB", port);
+            return port;
+        }
+    }
+
+    // 所有端口都被占用，报错退出
+    eprintln!(
+        "[ERROR] 端口 {}-{} 均被占用，无法启动 GDB 服务器",
+        preferred_port,
+        preferred_port + max_attempts
+    );
+    eprintln!("[ERROR] 请关闭占用这些端口的程序后重试");
+    std::process::exit(1);
 }
 
 // ============================================================
