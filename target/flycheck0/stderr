@@ -1,1 +1,7 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+error: failed to parse manifest at `/Volumes/CX/学习/Rust_STM32/tools/cargo-ocd/Cargo.toml`
+
+Caused by:
+  failed to parse the `edition` key
+
+Caused by:
+  this version of Cargo is older than the `2026` edition, and only supports `2015`, `2018`, `2021`, and `2024` editions.

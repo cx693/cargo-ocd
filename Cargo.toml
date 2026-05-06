@@ -1,11 +1,11 @@
 [package]
 name = "cargo-ocd"
-version = "0.1.0"
-edition = "2021"
+version = "0.1.1"
+edition = "2026"
 authors = ["CXi <pycx0@qq.com>"]
 description = "Cargo subcommand to flash and debug firmware via OpenOCD (supports any OpenOCD-compatible device)"
 license = "GPL-3.0-only"
-repository = "https://github.com/CXi/stm32f103_blink"
+repository = "https://github.com/cx693/cargo-ocd"
 readme = "README.md"
 keywords = ["openocd", "embedded", "flash", "debug", "cargo"]
 categories = ["embedded", "command-line-utilities", "hardware-support"]
