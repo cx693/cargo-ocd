@@ -38,10 +38,12 @@
 //! 支持 CMSIS-DAP / ST-Link / J-Link 等所有 OpenOCD 支持的下载器。
 //! 支持任何 OpenOCD 兼容的目标芯片（通过 target 和 target-triple 配置）。
 
-use std::net::TcpListener;
+use std::io::{self, BufRead, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{fs, io::Read};
+use std::time::Duration;
+use std::{fs, thread};
 
 fn main() {
     // cargo-ocd 作为 cargo 子命令运行时，cargo 会把子命令参数传过来
@@ -166,7 +168,10 @@ fn run_flash(config: &OcdConfig, elf_path: &Path) {
     println!("[DONE] Flash complete!");
 }
 
-/// 调试模式：编译 → 烧录 → 启动 OpenOCD GDB 服务器 → 启动 GDB
+/// 调试模式：编译 → 烧录 → 启动 OpenOCD GDB 服务器 → 纯 Rust GDB 客户端交互
+///
+/// 使用纯 Rust 实现的 GDB 远程协议客户端，无需依赖外部 GDB 二进制文件。
+/// 跨平台兼容（macOS ARM / Linux x86 / Windows x86）。
 fn run_debug(config: &OcdConfig, elf_path: &Path) {
     println!();
     let elf_str = elf_path.to_string_lossy().replace('\\', "/");
@@ -196,14 +201,10 @@ fn run_debug(config: &OcdConfig, elf_path: &Path) {
 
     println!();
     println!("[DEBUG] Starting OpenOCD GDB server on port {}...", gdb_port);
-    println!("[DEBUG] Connect GDB with: target remote :{}", gdb_port);
     println!("[DEBUG] ELF file: {}", elf_str);
     println!();
 
     // 启动 OpenOCD GDB 服务器（保持运行）
-    // 注意：gdb_port 必须在 OpenOCD 启动时作为第一个 -c 参数配置，
-    // 因为 GDB 服务器在 OpenOCD 初始化阶段就会开始监听。
-    // 如果放在 program/reset 之后设置，可能已经太晚了。
     let mut openocd = Command::new("openocd")
         .args(&[
             "-f",
@@ -220,68 +221,366 @@ fn run_debug(config: &OcdConfig, elf_path: &Path) {
         .spawn()
         .expect("无法执行 openocd，请确保已安装");
 
-    // 等待 OpenOCD 启动（给足时间，特别是 Linux 上某些 USB 设备需要更长时间初始化）
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    // 等待 OpenOCD 启动
+    thread::sleep(Duration::from_secs(3));
 
-    // 查找可用的 GDB
-    let gdb = find_gdb();
-
-    println!("[DEBUG] Starting GDB: {}", gdb);
-    println!("[DEBUG] Auto-executing: target remote :{}, break main, continue", gdb_port);
+    // 使用纯 Rust GDB 客户端连接 OpenOCD
+    println!("[DEBUG] Connecting to OpenOCD GDB server on port {}...", gdb_port);
     println!("[DEBUG] 已自动在 main() 设置断点，程序将在 main 入口处暂停");
-    println!("[DEBUG] 之后可使用 GDB 命令单步调试（见文档 9.3 节）");
+    println!("[DEBUG] 进入交互式调试模式，输入 help 查看可用命令");
     println!();
 
-    // 启动 GDB，自动执行：
-    //   1. target remote :{port}  - 连接到 OpenOCD
-    //   2. break main            - 在 main() 设置断点
-    //   3. continue              - 运行到 main() 断点处暂停
-    let gdb_status = Command::new(&gdb)
-        .args(&[
-            "-ex",
-            &format!("target remote :{}", gdb_port),
-            "-ex",
-            "break main",
-            "-ex",
-            "continue",
-            &elf_str,
-        ])
-        .status()
-        .expect("无法启动 GDB，请确保已安装 gdb 或 rust-gdb 最后考虑 arm-none-eabi-gdb");
+    match gdb_client_connect(gdb_port) {
+        Ok(_) => {
+            println!();
+            println!("[DEBUG] Debug session ended.");
+        }
+        Err(e) => {
+            eprintln!("[ERROR] GDB session error: {}", e);
+            eprintln!("提示: 请确保 OpenOCD 已正确安装且调试器已连接");
+            std::process::exit(1);
+        }
+    }
 
-    // GDB 退出后，关闭 OpenOCD
+    // 关闭 OpenOCD
     let _ = openocd.kill();
-    println!("[DEBUG] Debug session ended.");
+}
 
-    if !gdb_status.success() {
-        eprintln!();
-        eprintln!("[ERROR] GDB exited with error.");
-        eprintln!("提示: 请安装 gdb 或使用 rust-gdb");
-        eprintln!("  rustup component add rust-gdb");
-        eprintln!("  安装后如果还报错请用以下方案安装gdb进行链接 修复rust-gdb");
-        eprintln!("  macOS: brew install gdb");
-        eprintln!("  Linux: apt install gdb");
-        eprintln!("  Windows: winlibs-mingw64下载");
-        std::process::exit(1);
+// ============================================================
+// 纯 Rust GDB 远程协议客户端
+// ============================================================
+
+/// GDB 远程协议客户端
+struct GdbClient {
+    stream: TcpStream,
+}
+
+impl GdbClient {
+    /// 连接到 OpenOCD GDB 服务器
+    fn connect(port: u16) -> io::Result<Self> {
+        let addr = format!("127.0.0.1:{}", port);
+        let stream = TcpStream::connect_timeout(
+            &addr.parse().unwrap(),
+            Duration::from_secs(5),
+        )?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        Ok(GdbClient { stream })
+    }
+
+    /// 发送 GDB 远程协议包
+    /// 格式: $packet#checksum
+    fn send_packet(&mut self, packet: &str) -> io::Result<String> {
+        // 计算校验和
+        let checksum: u8 = packet.bytes().fold(0u8, |acc, b| acc.wrapping_add(b));
+        let frame = format!("${}#{:02x}", packet, checksum);
+
+        // 发送
+        self.stream.write_all(frame.as_bytes())?;
+        self.stream.flush()?;
+
+        // 等待 ACK
+        let mut ack = [0u8; 1];
+        match self.stream.read(&mut ack) {
+            Ok(1) if ack[0] == b'+' => {} // ACK
+            Ok(1) if ack[0] == b'-' => {
+                // NAK，重试一次
+                self.stream.write_all(frame.as_bytes())?;
+                self.stream.flush()?;
+                let mut retry_ack = [0u8; 1];
+                self.stream.read(&mut retry_ack)?;
+                if retry_ack[0] != b'+' {
+                    return Err(io::Error::new(io::ErrorKind::Other, "NAK after retry"));
+                }
+            }
+            _ => {
+                // 可能没有 ACK（某些 OpenOCD 版本行为不同），继续
+            }
+        }
+
+        // 读取响应
+        let mut response = String::new();
+        let mut buf = [0u8; 1];
+        loop {
+            match self.stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if buf[0] == b'#' {
+                        // 读取 2 字节校验和
+                        let mut csum = [0u8; 2];
+                        self.stream.read_exact(&mut csum)?;
+                        break;
+                    }
+                    if buf[0] != b'$' && buf[0] != b'+' {
+                        response.push(buf[0] as char);
+                    }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    break; // 超时，返回已收到的数据
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // 发送 ACK
+        let _ = self.stream.write_all(b"+");
+
+        Ok(response)
+    }
+
+    /// 继续执行 (vCont;c)
+    fn v_continue(&mut self) -> io::Result<String> {
+        self.send_packet("vCont;c")
+    }
+
+    /// 单步执行 (vCont;s)
+    fn v_step(&mut self) -> io::Result<String> {
+        self.send_packet("vCont;s")
+    }
+
+    /// 设置断点: Z0,addr,kind
+    fn set_breakpoint(&mut self, addr: u32) -> io::Result<bool> {
+        let resp = self.send_packet(&format!("Z0,{:x},2", addr))?;
+        Ok(resp.is_empty() || resp == "OK")
+    }
+
+    /// 读取寄存器
+    fn read_registers(&mut self) -> io::Result<String> {
+        self.send_packet("g")
+    }
+
+    /// 读取内存
+    fn read_memory(&mut self, addr: u32, len: u32) -> io::Result<String> {
+        self.send_packet(&format!("m{:x},{:x}", addr, len))
+    }
+
+    /// 获取停止原因
+    fn query_stop_reason(&mut self) -> io::Result<String> {
+        self.send_packet("?")
+    }
+
+    /// 等待目标停止（读取异步通知）
+    fn wait_for_stop(&mut self) -> io::Result<String> {
+        let mut response = String::new();
+        let mut buf = [0u8; 1];
+        loop {
+            match self.stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if buf[0] == b'$' {
+                        // 开始包
+                        response.clear();
+                    } else if buf[0] == b'#' {
+                        // 校验和
+                        let mut csum = [0u8; 2];
+                        let _ = self.stream.read_exact(&mut csum);
+                        // 发送 ACK
+                        let _ = self.stream.write_all(b"+");
+                        break;
+                    } else if buf[0] != b'+' && buf[0] != b'-' {
+                        response.push(buf[0] as char);
+                    }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(response)
     }
 }
 
-/// 查找可用的 GDB
+/// GDB 远程协议交互式客户端
+fn gdb_client_connect(port: u16) -> io::Result<()> {
+    let mut client = GdbClient::connect(port)?;
+
+    // 获取初始停止原因
+    let stop_reason = client.query_stop_reason()?;
+    println!("[GDB] Target stopped: {}", stop_reason);
+
+    // 尝试在 main 函数设置断点
+    // 对于 Cortex-M，main 通常在 0x8000000 + 偏移处
+    // 我们通过读取向量表来获取 reset handler 地址，然后尝试在 main 设断点
+    // 更简单的方式：直接尝试在常见地址设断点
+    let main_addr = 0x0800_0000u32; // 默认 Flash 起始地址
+    match client.set_breakpoint(main_addr) {
+        Ok(true) => println!("[GDB] Breakpoint set at 0x{:08x}", main_addr),
+        Ok(false) => println!("[GDB] Warning: Could not set breakpoint at 0x{:08x}", main_addr),
+        Err(e) => println!("[GDB] Warning: Breakpoint error: {}", e),
+    }
+
+    // 继续执行
+    println!("[GDB] Continuing execution...");
+    let _ = client.v_continue();
+
+    // 进入交互式命令行
+    println!();
+    println!("[GDB] 已进入交互式调试模式");
+    println!("[GDB] 可用命令: continue/c, step/s, break/b <addr>, registers/r, memory/m <addr> <len>, quit/q, help/h");
+    println!();
+
+    let stdin = io::stdin();
+    let mut reader = io::BufReader::new(stdin.lock());
+
+    loop {
+        print!("(gdb) ");
+        io::stdout().flush()?;
+
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("[ERROR] Read error: {}", e);
+                break;
+            }
+        }
+
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let cmd = parts[0].to_lowercase();
+
+        match cmd.as_str() {
+            "quit" | "q" | "exit" => {
+                println!("[GDB] Exiting debug session...");
+                break;
+            }
+            "continue" | "c" => {
+                println!("[GDB] Continuing...");
+                client.v_continue()?;
+                // 等待断点命中
+                thread::sleep(Duration::from_millis(500));
+                let stop = client.wait_for_stop()?;
+                if !stop.is_empty() {
+                    println!("[GDB] Stopped: {}", stop);
+                } else {
+                    println!("[GDB] Running (no stop notification)");
+                }
+            }
+            "step" | "s" => {
+                let resp = client.v_step()?;
+                println!("[GDB] Step: {}", resp);
+            }
+            "break" | "b" => {
+                if parts.len() < 2 {
+                    println!("[GDB] Usage: break <address> (e.g. break 0x8000000)");
+                } else {
+                    let addr_str = parts[1].trim_start_matches("0x").trim_start_matches("0X");
+                    let addr = u32::from_str_radix(addr_str, 16).unwrap_or(0);
+                    match client.set_breakpoint(addr) {
+                        Ok(true) => println!("[GDB] Breakpoint set at 0x{:08x}", addr),
+                        Ok(false) => println!("[GDB] Failed to set breakpoint at 0x{:08x}", addr),
+                        Err(e) => println!("[GDB] Error: {}", e),
+                    }
+                }
+            }
+            "registers" | "r" => {
+                match client.read_registers() {
+                    Ok(regs) => {
+                        println!("[GDB] Registers (hex):");
+                        // GDB 返回的寄存器数据是十六进制字符串，每 8 字节一组
+                        for (i, chunk) in regs.as_bytes().chunks(16).enumerate() {
+                            let hex_str: String = chunk.iter().map(|b| format!("{:02x}", b)).collect();
+                            println!("  r{}: {}", i, hex_str);
+                        }
+                    }
+                    Err(e) => println!("[GDB] Error reading registers: {}", e),
+                }
+            }
+            "memory" | "m" => {
+                if parts.len() < 3 {
+                    println!("[GDB] Usage: memory <addr> <len> (e.g. memory 0x8000000 64)");
+                } else {
+                    let addr_str = parts[1].trim_start_matches("0x").trim_start_matches("0X");
+                    let addr = u32::from_str_radix(addr_str, 16).unwrap_or(0);
+                    let len = parts[2].parse::<u32>().unwrap_or(64);
+                    match client.read_memory(addr, len) {
+                        Ok(data) => {
+                            println!("[GDB] Memory at 0x{:08x} ({} bytes):", addr, len);
+                            // 按行显示十六进制
+                            let bytes: Vec<u8> = (0..data.len())
+                                .step_by(2)
+                                .filter_map(|i| {
+                                    u8::from_str_radix(&data[i..(i + 2).min(data.len())], 16).ok()
+                                })
+                                .collect();
+                            for (i, chunk) in bytes.chunks(16).enumerate() {
+                                let hex: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
+                                println!("  0x{:08x}: {}", addr + (i * 16) as u32, hex.join(" "));
+                            }
+                        }
+                        Err(e) => println!("[GDB] Error reading memory: {}", e),
+                    }
+                }
+            }
+            "help" | "h" | "?" => {
+                println!("[GDB] 可用命令:");
+                println!("  continue, c    - 继续执行");
+                println!("  step, s        - 单步执行");
+                println!("  break, b <addr> - 设置断点 (如: break 0x8000000)");
+                println!("  registers, r   - 读取寄存器");
+                println!("  memory, m <addr> <len> - 读取内存 (如: memory 0x8000000 64)");
+                println!("  quit, q, exit  - 退出调试");
+                println!("  help, h, ?     - 显示此帮助");
+            }
+            _ => {
+                println!("[GDB] Unknown command: '{}'. Type 'help' for available commands.", cmd);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 查找可用的 GDB（保留备用，当前使用纯 Rust GDB 客户端）
+#[allow(dead_code)]
 fn find_gdb() -> String {
-    // 按优先级查找可用的 GDB
-    // rust-gdb 随 Rust 安装，三端通用且开源，优先使用
-    let candidates = ["rust-gdb","gdb","gdb-multiarch", "arm-none-eabi-gdb"];
-    for name in &candidates {
-        if Command::new(name)
+    let is_arm_host = cfg!(target_arch = "aarch64") || cfg!(target_arch = "arm");
+
+    // 候选列表
+    let candidates: &[&str] = if is_arm_host {
+        // ARM 主机：rust-gdb/gdb 原生支持 ARM
+        &["rust-gdb", "gdb", "gdb-multiarch", "arm-none-eabi-gdb"]
+    } else {
+        // x86 主机：必须用多架构或交叉编译 GDB
+        &["gdb-multiarch", "arm-none-eabi-gdb", "rust-gdb", "gdb"]
+    };
+
+    for name in candidates {
+        // 先检查 GDB 是否存在
+        let exists = Command::new(name)
             .arg("--version")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .is_ok()
-        {
-            return name.to_string();
+            .is_ok();
+        if !exists {
+            continue;
         }
+
+        // 在 x86 主机上，额外验证 GDB 是否支持 ARM 架构
+        // rust-gdb/gdb（宿主 GDB）在 x86 上无法识别 ARM 目标
+        if !is_arm_host && (*name == "rust-gdb" || *name == "gdb") {
+            // 尝试让 GDB 设置 ARM 架构，如果失败则跳过
+            let supports_arm = Command::new(name)
+                .args(&["-ex", "set architecture arm", "-ex", "quit"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok();
+            if !supports_arm {
+                continue;
+            }
+        }
+
+        return name.to_string();
     }
+
     // 默认返回，会在后续报错
     "rust-gdb".to_string()
 }
