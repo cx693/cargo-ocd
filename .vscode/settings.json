@@ -1,0 +1,8 @@
+{
+    "cortex-debug.variableUseNaturalFormat": true,
+    // rust-analyzer Run 按钮 → cargo-ocd（编译 + 烧录）
+    // 默认执行: cargo-ocd run --package <name> --bin <name> <extraArgs>
+    // cargo-ocd 会忽略 run/--package/--bin 参数，提取 --release 进行 Release 编译
+    "rust-analyzer.runnables.command": "cargo-ocd",
+    "rust-analyzer.runnables.extraArgs": ["--release"],
+}

@@ -1,0 +1,46 @@
+[package]
+name = "stm32f407-blink"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+stm32f4xx-hal = { version = "0.19", features = ["stm32f407", "rt"] }
+embedded-hal = "0.2"
+panic-halt = "0.2"
+
+# ============================================================
+# 🔧 OpenOCD 烧录配置（cargo-ocd 使用）
+# 修改这里适配你的下载器和芯片
+# ============================================================
+[package.metadata.ocd]
+# 下载器接口配置文件（CMSIS-DAP / ST-Link / J-Link 等）
+#   CMSIS-DAP:  interface/cmsis-dap.cfg
+#   ST-Link:    interface/stlink.cfg
+#   J-Link:     interface/jlink.cfg
+interface = "interface/cmsis-dap.cfg"
+
+# 目标芯片配置文件（OpenOCD 配置）
+#   STM32F0 系列: target/stm32f0x.cfg
+#   STM32F1 系列: target/stm32f1x.cfg
+#   STM32F2 系列: target/stm32f2x.cfg
+#   STM32F3 系列: target/stm32f3x.cfg
+#   STM32F4 系列: target/stm32f4x.cfg
+#   STM32F7 系列: target/stm32f7x.cfg
+#   STM32G0 系列: target/stm32g0x.cfg
+#   STM32G4 系列: target/stm32g4x.cfg
+#   STM32H7 系列: target/stm32h7x.cfg
+#   STM32L0 系列: target/stm32l0x.cfg
+#   STM32L4 系列: target/stm32l4x.cfg
+#   更多参考 OpenOCD 文档
+target = "target/stm32f4x.cfg"
+
+# 编译目标（Rust target triple）
+#   Cortex-M0/M0+ (STM32F0/G0/L0):  thumbv6m-none-eabi
+#   Cortex-M3   (STM32F1/F2):       thumbv7m-none-eabi
+#   Cortex-M4   (STM32F3/G4/L4):    thumbv7em-none-eabi
+#   Cortex-M4F  (STM32F4/L4+):      thumbv7em-none-eabihf
+#   Cortex-M7   (STM32F7/H7):       thumbv7em-none-eabihf
+#   Cortex-M33  (STM32H5/U5):       thumbv8m.main-none-eabihf
+target-triple = "thumbv7em-none-eabihf"
