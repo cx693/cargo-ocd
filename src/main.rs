@@ -290,20 +290,8 @@ fn run_debug(config: &OcdConfig, elf_path: &Path, user_gdb: Option<String>, gdb_
     println!();
 
     // 构建 GDB 启动参数
-    let mut gdb_args: Vec<String> = Vec::new();
-
-    // gdb-multiarch 需要指定目标架构
-    if gdb == "gdb-multiarch" {
-        let target_opt = match target_arch {
-            "arm" => "--target=arm-none-eabi",
-            "riscv" => "--target=riscv64-unknown-elf",
-            _ => "--target=arm-none-eabi",
-        };
-        gdb_args.push(target_opt.to_string());
-    }
-
     // 添加 GDB 命令：连接到 OpenOCD → 设置断点 → 运行到 main
-    gdb_args.extend_from_slice(&[
+    let gdb_args: Vec<String> = vec![
         "-ex".to_string(),
         format!("target remote :{}", gdb_port),
         "-ex".to_string(),
@@ -311,7 +299,7 @@ fn run_debug(config: &OcdConfig, elf_path: &Path, user_gdb: Option<String>, gdb_
         "-ex".to_string(),
         "continue".to_string(),
         elf_str.to_string(),
-    ]);
+    ];
 
     // 启动 GDB，自动执行：
     //   1. target remote :{port}  - 连接到 OpenOCD
@@ -333,15 +321,14 @@ fn run_debug(config: &OcdConfig, elf_path: &Path, user_gdb: Option<String>, gdb_
         let os = std::env::consts::OS;
         match os {
             "macos" => {
-                eprintln!("  macOS 推荐: rustup component add rust-gdb");
-                eprintln!("  或: brew install gdb");
+                eprintln!("  macOS 推荐: brew install gdb");
             }
             "windows" => {
                 eprintln!("  Windows 推荐: arm-none-eabi-gdb（ARM GCC 工具链）");
                 eprintln!("  下载: https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads");
             }
             "linux" => {
-                eprintln!("  Linux 推荐: sudo apt install gdb-multiarch");
+                eprintln!("  Linux 推荐: sudo apt install gdb-arm-none-eabi");
             }
             _ => {
                 eprintln!("  请安装 GDB（如 gdb-multiarch、rust-gdb 或 arm-none-eabi-gdb）");
@@ -400,15 +387,15 @@ fn find_gdb(target_arch: &str) -> String {
         // ARM 架构
         ("arm", "macos") => &["rust-gdb", "gdb", "arm-none-eabi-gdb"],
         ("arm", "windows") => &["arm-none-eabi-gdb"],
-        ("arm", "linux") => &["gdb-multiarch", "arm-none-eabi-gdb"],
+        ("arm", "linux") => &["arm-none-eabi-gdb"],
         // RISC-V 架构
         ("riscv", "macos") => &["riscv64-unknown-elf-gdb", "rust-gdb", "gdb"],
         ("riscv", "windows") => &["riscv64-unknown-elf-gdb"],
-        ("riscv", "linux") => &["riscv64-unknown-elf-gdb", "gdb-multiarch"],
+        ("riscv", "linux") => &["riscv64-unknown-elf-gdb"],
         // 未知架构，回退到通用列表
         (_, "macos") => &["rust-gdb", "gdb", "arm-none-eabi-gdb"],
         (_, "windows") => &["arm-none-eabi-gdb"],
-        (_, "linux") => &["gdb-multiarch", "arm-none-eabi-gdb"],
+        (_, "linux") => &["arm-none-eabi-gdb"],
         _ => &["rust-gdb", "gdb", "arm-none-eabi-gdb"],
     };
 
@@ -425,13 +412,10 @@ fn find_gdb(target_arch: &str) -> String {
     eprintln!();
     match (target_arch, os) {
         ("arm", "macos") => {
-            eprintln!("  ARM 目标 | macOS 系统推荐使用 rust-gdb：");
-            eprintln!("    rustup component add rust-gdb");
-            eprintln!();
-            eprintln!("  或安装系统 GDB：");
+            eprintln!("  ARM 目标 | macOS 系统推荐使用系统 GDB：");
             eprintln!("    brew install gdb");
             eprintln!();
-            eprintln!("  也可使用 arm-none-eabi-gdb（ARM 官方工具链）");
+            eprintln!("  或使用 arm-none-eabi-gdb（ARM 官方工具链）");
         }
         ("arm", "windows") => {
             eprintln!("  ARM 目标 | Windows 系统请安装 arm-none-eabi-gdb：");
@@ -442,11 +426,11 @@ fn find_gdb(target_arch: &str) -> String {
             eprintln!("    pacman -S mingw-w64-x86_64-arm-none-eabi-gdb");
         }
         ("arm", "linux") => {
-            eprintln!("  ARM 目标 | Linux 系统推荐使用 gdb-multiarch：");
-            eprintln!("    sudo apt install gdb-multiarch");
-            eprintln!();
-            eprintln!("  或安装 arm-none-eabi-gdb：");
+            eprintln!("  ARM 目标 | Linux 系统请安装 arm-none-eabi-gdb：");
             eprintln!("    sudo apt install gdb-arm-none-eabi");
+            eprintln!();
+            eprintln!("  或从 ARM 官网下载 ARM GCC 工具链：");
+            eprintln!("    https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads");
         }
         ("riscv", "macos") => {
             eprintln!("  RISC-V 目标 | macOS 系统推荐使用 riscv64-unknown-elf-gdb：");
@@ -456,8 +440,7 @@ fn find_gdb(target_arch: &str) -> String {
             eprintln!("  或使用 xPack 发布的 RISC-V GDB：");
             eprintln!("    https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases");
             eprintln!();
-            eprintln!("  也可尝试 rust-gdb 或系统 GDB（功能可能受限）：");
-            eprintln!("    rustup component add rust-gdb");
+            eprintln!("  也可尝试系统 GDB（功能可能受限）：");
             eprintln!("    brew install gdb");
         }
         ("riscv", "windows") => {
@@ -469,18 +452,14 @@ fn find_gdb(target_arch: &str) -> String {
             eprintln!("    pacman -S mingw-w64-x86_64-riscv64-unknown-elf-gdb");
         }
         ("riscv", "linux") => {
-            eprintln!("  RISC-V 目标 | Linux 系统推荐使用 riscv64-unknown-elf-gdb：");
-            eprintln!("    sudo apt install gdb-multiarch");
-            eprintln!();
-            eprintln!("  或安装 RISC-V 工具链：");
+            eprintln!("  RISC-V 目标 | Linux 系统请安装 riscv64-unknown-elf-gdb：");
             eprintln!("    sudo apt install gdb-riscv64-unknown-elf");
-            eprintln!("    # 或编译安装 riscv-gnu-toolchain");
+            eprintln!();
+            eprintln!("  或从 xPack 下载 RISC-V 工具链：");
+            eprintln!("    https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases");
         }
         (_, "macos") => {
-            eprintln!("  macOS 系统推荐使用 rust-gdb：");
-            eprintln!("    rustup component add rust-gdb");
-            eprintln!();
-            eprintln!("  或安装系统 GDB：");
+            eprintln!("  macOS 系统推荐使用系统 GDB：");
             eprintln!("    brew install gdb");
         }
         (_, "windows") => {
@@ -489,8 +468,8 @@ fn find_gdb(target_arch: &str) -> String {
             eprintln!("    https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads");
         }
         (_, "linux") => {
-            eprintln!("  Linux 系统推荐使用 gdb-multiarch：");
-            eprintln!("    sudo apt install gdb-multiarch");
+            eprintln!("  Linux 系统请安装 arm-none-eabi-gdb：");
+            eprintln!("    sudo apt install gdb-arm-none-eabi");
         }
         _ => {
             eprintln!("  请安装 GDB 调试器（如 rust-gdb、gdb-multiarch 或 arm-none-eabi-gdb）");
@@ -854,11 +833,11 @@ fn print_help() {
     println!("  ARM 架构：");
     println!("    macOS:   rust-gdb > gdb > arm-none-eabi-gdb");
     println!("    Windows: arm-none-eabi-gdb");
-    println!("    Linux:   gdb-multiarch > arm-none-eabi-gdb");
+    println!("    Linux:   arm-none-eabi-gdb");
     println!("  RISC-V 架构：");
     println!("    macOS:   riscv64-unknown-elf-gdb > rust-gdb > gdb");
     println!("    Windows: riscv64-unknown-elf-gdb");
-    println!("    Linux:   riscv64-unknown-elf-gdb > gdb-multiarch");
+    println!("    Linux:   riscv64-unknown-elf-gdb");
     println!();
     println!("配置方式（在项目的 Cargo.toml 中）：");
     println!();

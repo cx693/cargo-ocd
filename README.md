@@ -151,7 +151,7 @@ target-triple = "riscv32imac-unknown-none-elf"
 |------|----------------------|
 | macOS | `rust-gdb` > `gdb` > `arm-none-eabi-gdb` |
 | Windows | `arm-none-eabi-gdb` |
-| Linux | `gdb-multiarch` > `arm-none-eabi-gdb` |
+| Linux | `arm-none-eabi-gdb` |
 
 ### RISC-V 架构（target-triple 以 `riscv` 开头）
 
@@ -159,9 +159,7 @@ target-triple = "riscv32imac-unknown-none-elf"
 |------|----------------------|
 | macOS | `riscv64-unknown-elf-gdb` > `rust-gdb` > `gdb` |
 | Windows | `riscv64-unknown-elf-gdb` |
-| Linux | `riscv64-unknown-elf-gdb` > `gdb-multiarch` |
-
-> **注意**：`gdb-multiarch` 启动时会自动添加 `--target` 参数（ARM → `--target=arm-none-eabi`，RISC-V → `--target=riscv64-unknown-elf`）。
+| Linux | `riscv64-unknown-elf-gdb` |
 
 ### 手动指定 GDB
 
@@ -181,9 +179,9 @@ cargo ocd d --rust-gdb
 
 | 系统 | ARM 架构 | RISC-V 架构 |
 |------|---------|------------|
-| macOS | `rustup component add rust-gdb` 或 `brew install gdb` | `brew install riscv64-elf-gdb` |
+| macOS | `brew install gdb` | `brew install riscv64-elf-gdb` |
 | Windows | [ARM GCC 工具链](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) | [xPack RISC-V 工具链](https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases) |
-| Linux | `sudo apt install gdb-multiarch` | `sudo apt install gdb-multiarch` |
+| Linux | `sudo apt install gdb-arm-none-eabi` | `sudo apt install gdb-riscv64-unknown-elf` |
 
 ## 工作原理
 
