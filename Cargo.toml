@@ -1,6 +1,6 @@
 [package]
 name = "cargo-ocd"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["CXi <pycx0@qq.com>"]
 description = "Cargo subcommand to flash and debug firmware via OpenOCD (supports any OpenOCD-compatible device)"

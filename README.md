@@ -20,6 +20,9 @@
 - ✅ **固件大小显示**：烧录前自动显示 FLASH/RAM 占用进度条
 - ✅ **下载器无关**：支持 CMSIS-DAP / ST-Link / J-Link 等所有 OpenOCD 支持的下载器
 - ✅ **跨平台**：Windows / Linux / macOS 全平台支持
+- ✅ **ARM & RISC-V 双架构**：自动检测目标架构，选择合适的 GDB 调试器
+- ✅ **智能 GDB 选择**：根据操作系统和目标架构自动匹配最佳 GDB
+- ✅ **指定 GDB 端口**：通过 `--port` 参数自定义 GDB 服务器端口（默认 3333）
 
 ## 依赖项
 
@@ -29,7 +32,7 @@
 |------|------|----------|
 | [OpenOCD](https://openocd.org/) | 烧录和 GDB 服务器 | `brew install openocd` (macOS) / `apt install openocd` (Linux) / [官网下载](https://openocd.org/) (Windows) |
 | [Rust](https://www.rust-lang.org/) | 编译工具链 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| GDB（可选，调试用） | 断点调试 | `rustup component add rust-gdb`（推荐，Rust 自带） |
+| GDB（可选，调试用） | 断点调试 | 自动检测，详见下方 [GDB 选择策略](#gdb-选择策略) |
 
 ## 安装
 
@@ -95,6 +98,9 @@ cargo ocd d
 | 选项 | 说明 |
 |------|------|
 | `--release` | 使用 Release 模式编译（默认 Debug 模式） |
+| `--gdb` | 调试时使用系统 GDB（macOS 可用） |
+| `--rust-gdb` | 调试时使用 rust-gdb（macOS/Linux 可用） |
+| `--port <PORT>` | 指定 GDB 服务器端口（默认 3333） |
 | `--help` / `-h` | 显示帮助信息 |
 
 ## 配置示例
@@ -134,6 +140,50 @@ interface = "interface/cmsis-dap.cfg"
 target = "target/gd32vf103.cfg"
 target-triple = "riscv32imac-unknown-none-elf"
 ```
+
+## GDB 选择策略
+
+`cargo-ocd` 会根据目标架构和操作系统自动选择最合适的 GDB 调试器：
+
+### ARM 架构（target-triple 以 `thumbv` / `armv` 开头）
+
+| 系统 | GDB 优先级（从左到右） |
+|------|----------------------|
+| macOS | `rust-gdb` > `gdb` > `arm-none-eabi-gdb` |
+| Windows | `arm-none-eabi-gdb` |
+| Linux | `gdb-multiarch` > `arm-none-eabi-gdb` |
+
+### RISC-V 架构（target-triple 以 `riscv` 开头）
+
+| 系统 | GDB 优先级（从左到右） |
+|------|----------------------|
+| macOS | `riscv64-unknown-elf-gdb` > `rust-gdb` > `gdb` |
+| Windows | `riscv64-unknown-elf-gdb` |
+| Linux | `riscv64-unknown-elf-gdb` > `gdb-multiarch` |
+
+> **注意**：`gdb-multiarch` 启动时会自动添加 `--target` 参数（ARM → `--target=arm-none-eabi`，RISC-V → `--target=riscv64-unknown-elf`）。
+
+### 手动指定 GDB
+
+如果自动选择不符合需求，可以使用以下参数手动指定：
+
+```bash
+# 使用系统 GDB
+cargo ocd d --gdb
+
+# 使用 rust-gdb
+cargo ocd d --rust-gdb
+```
+
+### 安装 GDB
+
+如果未找到任何可用的 GDB，程序会给出详细的安装提示：
+
+| 系统 | ARM 架构 | RISC-V 架构 |
+|------|---------|------------|
+| macOS | `rustup component add rust-gdb` 或 `brew install gdb` | `brew install riscv64-elf-gdb` |
+| Windows | [ARM GCC 工具链](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) | [xPack RISC-V 工具链](https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases) |
+| Linux | `sudo apt install gdb-multiarch` | `sudo apt install gdb-multiarch` |
 
 ## 工作原理
 
