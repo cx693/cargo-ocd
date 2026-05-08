@@ -1,5 +1,5 @@
 [package]
-name = "stm32f103-led"
+name = "stm32f103"
 version = "0.1.0"
 edition = "2021"
 
@@ -19,6 +19,9 @@ panic-halt = "0.2"
 #   CMSIS-DAP:  interface/cmsis-dap.cfg
 #   ST-Link:    interface/stlink.cfg
 #   J-Link:     interface/jlink.cfg
+# win系统
+# interface = "interface/cmsis-dap-v1.cfg"
+# macos系统
 interface = "interface/cmsis-dap.cfg"
 
 # 目标芯片配置文件（OpenOCD 配置）
